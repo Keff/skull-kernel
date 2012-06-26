@@ -1053,27 +1053,24 @@ static int zcache_do_preload(struct tmem_pool *pool)
 			kmem_cache_free(zcache_objnode_cache, objnode);
 	}
 	preempt_enable_no_resched();
-	obj = kmem_cache_alloc(zcache_obj_cache, ZCACHE_GFP_MASK);
-	if (unlikely(obj == NULL)) {
-		zcache_failed_alloc++;
-		goto out;
+	if (!kp->obj) {
+		obj = kmem_cache_alloc(zcache_obj_cache, ZCACHE_GFP_MASK);
+		if (unlikely(obj == NULL)) {
+			zcache_failed_alloc++;
+			goto out;
+		}
+		kp->obj = obj;
 	}
-	page = (void *)__get_free_page(ZCACHE_GFP_MASK);
-	if (unlikely(page == NULL)) {
-		zcache_failed_get_free_pages++;
-		kmem_cache_free(zcache_obj_cache, obj);
-		goto out;
+	if (!kp->page) {
+		page = (void *)__get_free_page(ZCACHE_GFP_MASK);
+		if (unlikely(page == NULL)) {
+			zcache_failed_get_free_pages++;
+			goto out;
+		}
+		kp->page = page;
 	}
 	preempt_disable();
 	kp = &__get_cpu_var(zcache_preloads);
-	if (kp->obj == NULL)
-		kp->obj = obj;
-	else
-		kmem_cache_free(zcache_obj_cache, obj);
-	if (kp->page == NULL)
-		kp->page = page;
-	else
-		free_page((unsigned long)page);
 	ret = 0;
 out:
 	return ret;
@@ -1582,15 +1579,15 @@ static int zcache_put_page(int cli_id, int pool_id, struct tmem_oid *oidp,
 			else
 				zcache_failed_pers_puts++;
 		}
-		zcache_put_pool(pool);
 		preempt_enable_no_resched();
 	} else {
 		zcache_put_to_flush++;
 		if (atomic_read(&pool->obj_count) > 0)
 			/* the put fails whether the flush succeeds or not */
 			(void)tmem_flush_page(pool, oidp, index);
-		zcache_put_pool(pool);
 	}
+
+	zcache_put_pool(pool);
 out:
 	return ret;
 }
