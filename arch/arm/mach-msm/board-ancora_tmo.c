@@ -4571,29 +4571,39 @@ static struct platform_device qcedev_device = {
 static unsigned char quickvx_mddi_client = 1;
 
 static struct regulator *mddi_ldo17;
+static struct regulator *mddi_lcd;
 
 static int display_common_init(void)
 {
+	struct regulator_bulk_data regs[2] = {
+		{ .supply = "ldo17", .min_uV = 1800000, .max_uV = 1800000},
+		{ .supply = "ldo15", .min_uV = 3000000, .max_uV = 3000000},
+	};
+
 	int rc = 0;
 
-	mddi_ldo17 = regulator_get(NULL, "ldo17");
-
-	if (IS_ERR(mddi_ldo17)) {
-		rc = PTR_ERR(mddi_ldo17);
-		pr_err("%s: could not get ldo17: %d\n",
-				__func__, rc);
-	}
-	rc = regulator_set_voltage(mddi_ldo17, 1800000, 1800000);
+	rc = regulator_bulk_get(NULL, ARRAY_SIZE(regs), regs);
 	if (rc) {
-		pr_err("%s: could not set ldo17 voltage: %d\n", __func__, rc);
-		return rc;
-	}
-	rc = regulator_enable(mddi_ldo17);
-	if (rc) {
-		pr_err("%s: could not enable ldo17: %d\n", __func__, rc);
-		return rc;
+		pr_err("%s: regulator_bulk_get failed: %d\n",
+			__func__, rc);
+		goto bail;
 	}
 
+	rc = regulator_bulk_set_voltage(ARRAY_SIZE(regs), regs);
+	if (rc) {
+		pr_err("%s: regulator_bulk_set_voltage failed: %d\n",
+			__func__, rc);
+		goto put_regs;
+	}
+
+	mddi_ldo17 = regs[0].consumer;
+	mddi_lcd   = regs[1].consumer;	/* ldo15 */
+
+	return rc;
+
+put_regs:
+	regulator_bulk_free(ARRAY_SIZE(regs), regs);
+bail:
 	return rc;
 }
 
@@ -4625,6 +4635,13 @@ static int display_common_power(int on)
 			return rc;
 		}
 
+		rc = regulator_enable(mddi_lcd);
+		if (rc) {
+			pr_err("%s: LCD regulator enable failed (%d)\n",
+				__func__, rc);
+			return rc;
+		}
+
 		mdelay(5);	/* ensure power is stable */
 
 	} else {
@@ -4634,10 +4651,67 @@ static int display_common_power(int on)
 				__func__, rc);
 			return rc;
 		}
+
+		rc = regulator_disable(mddi_lcd);
+		if (rc) {
+			pr_err("%s: LCD regulator disable failed (%d)\n",
+				__func__, rc);
+			return rc;
+		}
 	}
 
 	return rc;
 }
+
+static int msm_fb_mddi_sel_clk(u32 *clk_rate)
+{
+	*clk_rate *= 2;
+	return 0;
+}
+
+static int msm_fb_mddi_client_power(u32 client_id)
+{
+	struct regulator *mddi_ldo20;
+	int rc;
+
+	printk(KERN_NOTICE "\n client_id = 0x%x", client_id);
+	/* Check if it is Quicklogic client */
+	if (client_id == 0xc5835800) {
+		printk(KERN_NOTICE "\n Quicklogic MDDI client");
+	} else {
+		printk(KERN_NOTICE "\n Non-Quicklogic MDDI client");
+		quickvx_mddi_client = 0;
+		gpio_set_value(97, 0);
+		gpio_set_value_cansleep(PM8058_GPIO_PM_TO_SYS(
+			PMIC_GPIO_QUICKVX_CLK), 0);
+
+		mddi_ldo20 = regulator_get(NULL, "gp13");
+
+		if (IS_ERR(mddi_ldo20)) {
+			rc = PTR_ERR(mddi_ldo20);
+			pr_err("%s: could not get ldo20: %d\n", __func__, rc);
+			return rc;
+		}
+		rc = regulator_set_voltage(mddi_ldo20, 1500000, 1500000);
+		if (rc) {
+			pr_err("%s: could not set ldo20 voltage: %d\n", __func__, rc);
+			return rc;
+		}
+		rc = regulator_enable(mddi_ldo20);
+		if (rc) {
+			pr_err("%s: could not enable ldo20: %d\n", __func__, rc);
+			return rc;
+		}
+	}
+
+	return 0;
+}
+
+static struct mddi_platform_data mddi_pdata = {
+	.mddi_power_save = display_common_power,
+	.mddi_sel_clk = msm_fb_mddi_sel_clk,
+	.mddi_client_power = msm_fb_mddi_client_power,
+};
 
 static struct msm_panel_common_pdata mdp_pdata = {
 	.hw_revision_addr = 0xac001270,
@@ -4737,19 +4811,12 @@ static int lcdc_common_panel_power(int on)
 static int lcdc_panel_power(int on)
 {
 	int flag_on = !!on;
-	static int lcdc_power_save_on, lcdc_power_initialized;
+	static int lcdc_power_save_on;
 
 	if (lcdc_power_save_on == flag_on)
 		return 0;
 
 	lcdc_power_save_on = flag_on;
-
-	if (unlikely(!lcdc_power_initialized)) {
-		quickvx_mddi_client = 0;
-		regulator_put(mddi_ldo17);
-		display_common_init();
-		lcdc_power_initialized = 1;
-	}
 
 	return lcdc_common_panel_power(on);
 }
@@ -4761,6 +4828,7 @@ static struct lcdc_platform_data lcdc_pdata = {
 static void __init msm_fb_add_devices(void)
 {
 	msm_fb_register_device("mdp", &mdp_pdata);
+	msm_fb_register_device("pmdh", &mddi_pdata);
 	msm_fb_register_device("lcdc", &lcdc_pdata);
 #ifdef CONFIG_FB_MSM_TVOUT
 	msm_fb_register_device("tvout_device", NULL);
