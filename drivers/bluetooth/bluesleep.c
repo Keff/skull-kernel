@@ -84,8 +84,8 @@ DECLARE_DELAYED_WORK(sleep_workqueue, bluesleep_sleep_work);
 #define bluesleep_rx_idle()     schedule_delayed_work(&sleep_workqueue, 0)
 #define bluesleep_tx_idle()     schedule_delayed_work(&sleep_workqueue, 0)
 
-/* 1 second timeout */
-#define TX_TIMER_INTERVAL	1
+/* 10 second timeout */
+#define TX_TIMER_INTERVAL	10
 
 /* state variable names and bit positions */
 #define BT_PROTO	0x01
@@ -203,19 +203,11 @@ static void bluesleep_sleep_work(struct work_struct *work)
 			return;
 		}
 
-		if (bsi->uport != NULL && msm_hs_tx_empty(bsi->uport)) {
-			if (sleep_cnt > 2) {
-				BT_DBG("going to sleep...");
-				set_bit(BT_ASLEEP, &flags);
-				/* Deactivating UART */
-				sleep_cnt=0;
-				hsuart_power(0);
-			} else {
-				BT_DBG("delaying...");
-				sleep_cnt++;
-				mod_timer(&tx_timer, jiffies + (TX_TIMER_INTERVAL * HZ));
-				return;
-			}
+		if (msm_hs_tx_empty(bsi->uport)) {
+			BT_DBG("going to sleep...");
+			set_bit(BT_ASLEEP, &flags);
+			/* Deactivating UART */
+			hsuart_power(0);
 		} else {
 
 			mod_timer(&tx_timer, jiffies + (TX_TIMER_INTERVAL * HZ));
