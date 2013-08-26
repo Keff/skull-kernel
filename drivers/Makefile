@@ -148,3 +148,7 @@ obj-$(CONFIG_MACH_ANCORA)  += sensors_ancora/
 obj-$(CONFIG_MACH_ANCORA_TMO)  += sensors_ancora/
 obj-$(CONFIG_MACH_APACHE)  += sensors_ancora/
 obj-$(CONFIG_MACH_ARIESVE)  += sensors_ariesve/
+
+ifeq (1, $(shell if [ -d drivers/exfat ] ; then echo 1 ; fi))
+ 	obj-y   += exfat/
+ endif
